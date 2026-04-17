@@ -1,6 +1,7 @@
+"""FastAPI entrypoint with API guardrails and ingestion job orchestration."""
+
 from __future__ import annotations
 
-import logging
 import threading
 import time
 import uuid
@@ -14,18 +15,18 @@ from pydantic import BaseModel, Field
 from src.config import settings, validate_runtime_settings
 from src.ingest import IngestResult, ingest_from_hf, ingest_topic
 from src.job_store import JobStore
+from src.logging_utils import configure_logging, get_logger
 from src.neo4j_client import neo4j_client
 from src.retrieve import query_graph
 
 
-logging.basicConfig(
-    level=getattr(logging, settings.log_level.upper(), logging.INFO),
-    format="%(asctime)s %(levelname)s %(name)s %(message)s",
-)
-logger = logging.getLogger(__name__)
+configure_logging(settings.log_level)
+logger = get_logger(__name__)
 
 
 class _RateLimiter:
+    """Simple in-memory fixed-window rate limiter per client key."""
+
     def __init__(self, max_requests: int, period_seconds: int = 60) -> None:
         self.max_requests = max_requests
         self.period_seconds = period_seconds
@@ -33,6 +34,7 @@ class _RateLimiter:
         self._hits: dict[str, deque[float]] = {}
 
     def allow(self, key: str) -> bool:
+        """Return whether a request is allowed for given client key."""
         now = time.time()
         with self._lock:
             bucket = self._hits.setdefault(key, deque())
@@ -50,28 +52,35 @@ rate_limiter = _RateLimiter(max_requests=settings.rate_limit_per_minute, period_
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    """Initialize runtime configuration and release resources on shutdown."""
     validate_runtime_settings()
-    logger.info("Starting service", extra={"event": "startup"})
+    logger.info("Service starting")
     try:
         yield
     finally:
         neo4j_client.close()
-        logger.info("Shutting down service", extra={"event": "shutdown"})
+        logger.info("Service shutdown complete")
 
 
 app = FastAPI(title="Wikipedia Neo4j GraphRAG Demo", version="0.1.0", lifespan=lifespan)
 
 
 class IngestRequest(BaseModel):
+    """Request payload for Wikipedia topic ingestion."""
+
     topics: list[str] = Field(min_length=1, description="Wikipedia page topics")
 
 
 class QueryRequest(BaseModel):
+    """Request payload for query endpoint."""
+
     question: str = Field(min_length=3)
     top_k: int = Field(default=4, ge=1, le=20)
 
 
 class HFDatasetIngestRequest(BaseModel):
+    """Request payload for direct HF dataset ingestion endpoint."""
+
     config_name: str = Field(default="20231101.en", description="HF config, e.g. 20231101.en")
     split: str = Field(default="train")
     sample_size: int = Field(default=5, ge=1, le=200)
@@ -79,10 +88,12 @@ class HFDatasetIngestRequest(BaseModel):
 
 
 class HFIngestJobRequest(HFDatasetIngestRequest):
-    pass
+    """Request payload for background HF ingestion job."""
 
 
 class _JobState(BaseModel):
+    """Persisted state model for one background HF ingestion job."""
+
     job_id: str
     status: str
     config_name: str
@@ -105,6 +116,7 @@ _job_store = JobStore(".hf_ingest_jobs.json")
 
 
 def _serialize_ingest_result(result: IngestResult) -> dict:
+    """Convert internal ingest result object to API response dictionary."""
     return {
         "topic": result.topic,
         "page_id": result.page_id,
@@ -116,10 +128,12 @@ def _serialize_ingest_result(result: IngestResult) -> dict:
 
 
 def _persist_job(job: _JobState) -> None:
+    """Persist one job state to storage."""
     _job_store.upsert(job.job_id, job.model_dump())
 
 
 def _restore_jobs() -> None:
+    """Restore persisted jobs and normalize stale in-progress states."""
     persisted = _job_store.load_all()
     for job_id, payload in persisted.items():
         try:
@@ -141,41 +155,48 @@ _restore_jobs()
 
 
 def _request_id(request: Request) -> str:
+    """Resolve request id from header or generate one."""
     return request.headers.get("X-Request-ID", str(uuid.uuid4()))
 
 
 def _client_key(request: Request) -> str:
+    """Compute client key used by rate limiter."""
     return request.client.host if request.client else "unknown"
 
 
 def _authorize(x_api_key: str | None = Header(default=None)) -> None:
+    """Validate optional API key when configured."""
     if settings.app_api_key and x_api_key != settings.app_api_key:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _enforce_rate_limit(request: Request) -> None:
+    """Enforce per-client request rate limit."""
     key = _client_key(request)
     if not rate_limiter.allow(key):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
 
 def _guard(request: Request, x_api_key: str | None = Header(default=None)) -> None:
+    """Run auth and rate-limit checks for protected endpoints."""
     _authorize(x_api_key)
     _enforce_rate_limit(request)
 
 
 @app.get("/health")
 def health() -> dict:
+    """Return basic liveness status."""
     return {"status": "ok"}
 
 
 @app.get("/ready")
 def ready() -> dict:
+    """Return readiness status including Neo4j dependency check."""
     try:
         neo4j_client.verify_connectivity()
         neo4j_ok = True
         neo4j_error = None
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         neo4j_ok = False
         neo4j_error = str(exc)
 
@@ -188,6 +209,7 @@ def ready() -> dict:
 
 @app.get("/metrics")
 def metrics() -> str:
+    """Return Prometheus-style counters for ingestion jobs."""
     with _jobs_lock:
         counts: dict[str, int] = {}
         for job in _jobs.values():
@@ -207,27 +229,24 @@ def metrics() -> str:
 
 @app.post("/ingest", dependencies=[Depends(_guard)])
 def ingest(req: IngestRequest, request: Request) -> dict:
+    """Ingest one or more Wikipedia topics."""
     request_id = _request_id(request)
     results = []
     for topic in req.topics:
         try:
             result = ingest_topic(topic)
-        except ValueError as exc:
-            logger.warning("Ingest validation error", extra={"request_id": request_id, "topic": topic})
-            raise HTTPException(
-                status_code=400, detail=f"Failed ingest for '{topic}': {exc}"
-            ) from exc
-        except RuntimeError as exc:
-            logger.warning("Ingest runtime error", extra={"request_id": request_id, "topic": topic})
-            raise HTTPException(
-                status_code=400, detail=f"Failed ingest for '{topic}': {exc}"
-            ) from exc
+        except (ValueError, RuntimeError) as exc:
+            logger.warning("Topic ingest failed", extra={"request_id": request_id, "topic": topic})
+            raise HTTPException(status_code=400, detail=f"Failed ingest for '{topic}': {exc}") from exc
         results.append(_serialize_ingest_result(result))
+
+    logger.info("Topic ingest completed", extra={"request_id": request_id, "count": len(results)})
     return {"ingested": results}
 
 
 @app.post("/query", dependencies=[Depends(_guard)])
 def query(req: QueryRequest, request: Request) -> dict:
+    """Query graph and return deterministic answer plus citations."""
     request_id = _request_id(request)
     started = time.perf_counter()
     try:
@@ -247,6 +266,7 @@ def query(req: QueryRequest, request: Request) -> dict:
 
 @app.post("/ingest/hf", dependencies=[Depends(_guard)])
 def ingest_hf(req: HFDatasetIngestRequest, request: Request) -> dict:
+    """Ingest a bounded sample directly from HF dataset (synchronous)."""
     request_id = _request_id(request)
     try:
         results = ingest_from_hf(
@@ -259,10 +279,12 @@ def ingest_hf(req: HFDatasetIngestRequest, request: Request) -> dict:
         logger.warning("HF ingest failed", extra={"request_id": request_id})
         raise HTTPException(status_code=400, detail=f"Failed HF ingestion: {exc}") from exc
 
+    logger.info("HF ingest completed", extra={"request_id": request_id, "count": len(results)})
     return {"ingested": [_serialize_ingest_result(r) for r in results]}
 
 
 def _run_hf_ingest_job(job_id: str, req: HFIngestJobRequest) -> None:
+    """Run one HF ingestion job in background worker thread."""
     stop_event = _job_stops[job_id]
 
     def _on_progress(processed: int, total: int | None, title: str) -> None:
@@ -286,11 +308,13 @@ def _run_hf_ingest_job(job_id: str, req: HFIngestJobRequest) -> None:
             job = _jobs[job_id]
             job.ingested = [_serialize_ingest_result(r) for r in results]
             job.status = "cancelled" if stop_event.is_set() else "completed"
+            logger.info("HF job finished", extra={"job_id": job_id, "status": job.status})
     except RuntimeError as exc:
         with _jobs_lock:
             job = _jobs[job_id]
             job.status = "failed"
             job.error = str(exc)
+            logger.warning("HF job failed", extra={"job_id": job_id, "error": str(exc)})
     finally:
         with _jobs_lock:
             job = _jobs[job_id]
@@ -302,6 +326,7 @@ def _run_hf_ingest_job(job_id: str, req: HFIngestJobRequest) -> None:
 
 @app.post("/ingest/hf/jobs", dependencies=[Depends(_guard)])
 def start_hf_ingest_job(req: HFIngestJobRequest) -> dict:
+    """Start asynchronous HF ingestion job and return job id."""
     job_id = str(uuid.uuid4())
     started_at = datetime.now(timezone.utc).isoformat()
 
@@ -322,11 +347,13 @@ def start_hf_ingest_job(req: HFIngestJobRequest) -> dict:
     thread = threading.Thread(target=_run_hf_ingest_job, args=(job_id, req), daemon=True)
     thread.start()
 
+    logger.info("HF job started", extra={"job_id": job_id})
     return {"job_id": job_id, "status": "running", "started_at": started_at}
 
 
 @app.get("/ingest/hf/jobs/{job_id}", dependencies=[Depends(_guard)])
 def get_hf_ingest_job(job_id: str) -> dict:
+    """Get one HF ingestion job state by id."""
     with _jobs_lock:
         job = _jobs.get(job_id)
         if not job:
@@ -336,6 +363,7 @@ def get_hf_ingest_job(job_id: str) -> dict:
 
 @app.get("/ingest/hf/jobs", dependencies=[Depends(_guard)])
 def list_hf_ingest_jobs(status: str | None = None, limit: int = 50, offset: int = 0) -> dict:
+    """List HF ingestion jobs with optional status filter and pagination."""
     with _jobs_lock:
         jobs = list(_jobs.values())
 
@@ -355,6 +383,7 @@ def list_hf_ingest_jobs(status: str | None = None, limit: int = 50, offset: int 
 
 @app.post("/ingest/hf/jobs/{job_id}/stop", dependencies=[Depends(_guard)])
 def stop_hf_ingest_job(job_id: str) -> dict:
+    """Request cancellation for a running HF ingestion job."""
     with _jobs_lock:
         job = _jobs.get(job_id)
         stop_event = _job_stops.get(job_id)
@@ -364,4 +393,5 @@ def stop_hf_ingest_job(job_id: str) -> dict:
         if job.status == "running":
             job.status = "cancelling"
         _persist_job(job)
+        logger.info("HF job stop requested", extra={"job_id": job_id, "status": job.status})
         return {"job_id": job_id, "status": job.status}

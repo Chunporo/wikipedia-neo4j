@@ -1,3 +1,5 @@
+"""Gemini integration for embeddings and Cypher generation."""
+
 from __future__ import annotations
 
 import json
@@ -7,9 +9,14 @@ from google import genai
 from google.genai import types
 
 from src.config import load_gemini_api_keys, settings
+from src.logging_utils import get_logger
+
+
+logger = get_logger(__name__)
 
 
 def _is_retryable_gemini_error(exc: Exception) -> bool:
+    """Return whether an exception message indicates retryable API failure."""
     msg = str(exc).lower()
     retry_tokens = [
         "429",
@@ -24,19 +31,18 @@ def _is_retryable_gemini_error(exc: Exception) -> bool:
     return any(tok in msg for tok in retry_tokens)
 
 
-def _client() -> genai.Client:
-    return genai.Client(api_key=load_gemini_api_keys()[0])
-
-
 def _client_pool() -> list[genai.Client]:
-    return [genai.Client(api_key=key) for key in load_gemini_api_keys()]
+    """Create a client per configured Gemini API key."""
+    keys = load_gemini_api_keys()
+    return [genai.Client(api_key=key) for key in keys]
 
 
 def embed_texts(texts: list[str]) -> list[list[float]]:
+    """Generate embeddings for texts with key-rotation fallback."""
     clients = _client_pool()
     last_error: Exception | None = None
 
-    for client in clients:
+    for i, client in enumerate(clients, start=1):
         try:
             vectors: list[list[float]] = []
             for text in texts:
@@ -48,9 +54,11 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
                 if not emb_list:
                     raise RuntimeError("Gemini embedding response had no vectors")
                 vectors.append(list(emb_list[0].values))
+            logger.debug("Embedding generation succeeded", extra={"client_index": i, "count": len(texts)})
             return vectors
         except Exception as exc:
             last_error = exc
+            logger.warning("Embedding generation failed", extra={"client_index": i, "error": str(exc)})
             if not _is_retryable_gemini_error(exc):
                 raise
             continue
@@ -59,6 +67,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
 
 
 def _strip_code_fence(s: str) -> str:
+    """Strip markdown code fences from model output."""
     s = s.strip()
     if s.startswith("```"):
         s = re.sub(r"^```[a-zA-Z]*\n?", "", s)
@@ -67,6 +76,7 @@ def _strip_code_fence(s: str) -> str:
 
 
 def generate_readonly_cypher(question: str) -> str:
+    """Generate a read-only Cypher query for a natural-language question."""
     schema = (
         "Nodes: Page(id,title,url,summary), Chunk(id,text,sequence_number,embedding), "
         "Entity(id,name,type). Relationships: (Page)-[:HAS_CHUNK]->(Chunk), "
@@ -89,7 +99,7 @@ Strict rules:
     clients = _client_pool()
     last_error: Exception | None = None
 
-    for client in clients:
+    for i, client in enumerate(clients, start=1):
         try:
             resp = client.models.generate_content(
                 model=settings.gemini_model_text,
@@ -105,12 +115,13 @@ Strict rules:
             cypher = str(parsed.get("cypher", "")).strip()
             if not cypher:
                 raise RuntimeError("Gemini returned empty Cypher")
-            # Ensure the runtime top_k parameter can always be applied.
             if "$top_k" not in cypher and "limit" not in cypher.lower():
                 cypher = f"{cypher.rstrip(';')} LIMIT $top_k"
+            logger.debug("Cypher generation succeeded", extra={"client_index": i})
             return cypher
         except Exception as exc:
             last_error = exc
+            logger.warning("Cypher generation failed", extra={"client_index": i, "error": str(exc)})
             if not _is_retryable_gemini_error(exc):
                 raise
             continue
@@ -119,11 +130,11 @@ Strict rules:
 
 
 def assert_readonly_cypher(cypher: str) -> None:
+    """Validate that generated Cypher is read-only and shape-compatible."""
     raw = (cypher or "").strip()
     if not raw:
         raise RuntimeError("Generated Cypher is empty")
 
-    # Block multi-statement payloads. A single optional trailing semicolon is allowed.
     trimmed = raw[:-1] if raw.endswith(";") else raw
     if ";" in trimmed:
         raise RuntimeError("Generated Cypher contains multiple statements")
@@ -145,7 +156,6 @@ def assert_readonly_cypher(cypher: str) -> None:
     if any(token in padded for token in blocked):
         raise RuntimeError("Generated Cypher is not read-only")
 
-    # Enforce stable output aliases expected by the query pipeline.
     required_aliases = ["page_title", "page_url", "chunk_id", "chunk_text", "score"]
     for alias in required_aliases:
         if re.search(rf"\bas\s+{re.escape(alias)}\b", lowered) is None:
