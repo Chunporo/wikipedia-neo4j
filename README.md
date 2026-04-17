@@ -6,6 +6,13 @@ Backend demo that ingests Wikipedia content into Neo4j and answers questions wit
 
 ## Highlights
 
+## Modes
+
+- **Ingest mode**: build graph context from Wikipedia topics or HF dataset (`/ingest`, `/ingest/hf`, async jobs).
+- **Query mode**: answer user questions with validated Cypher and hybrid fallback retrieval (`/query`).
+- **Export mode**: planned endpoint for graph snapshot export.
+- **Ops mode**: health/readiness/metrics/logging for deployment safety.
+
 - Ingestion sources:
   - Wikipedia API (`POST /ingest`)
   - Hugging Face dataset (`POST /ingest/hf`)
@@ -94,6 +101,14 @@ curl "http://localhost:8000/metrics"
 ```
 
 ## Development
+
+```bash
+make install
+make check
+make docs
+```
+
+Or run commands directly:
 
 ```bash
 uv run ruff check src tests
