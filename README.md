@@ -1,5 +1,7 @@
 # Wikipedia Neo4j GraphRAG Demo
 
+[![CI](https://github.com/Chunporo/wikipedia-neo4j/actions/workflows/ci.yml/badge.svg)](https://github.com/Chunporo/wikipedia-neo4j/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.12%2B-blue) ![Coverage](https://img.shields.io/badge/coverage-75%25%2B-brightgreen)
+
 Backend demo that ingests Wikipedia content into Neo4j and answers questions with citations.
 
 ## Highlights
