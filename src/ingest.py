@@ -1,6 +1,7 @@
+"""Ingestion pipelines for Wikipedia API and Hugging Face dataset."""
+
 from __future__ import annotations
 
-import logging
 import re
 import uuid
 from dataclasses import dataclass
@@ -10,14 +11,17 @@ import wikipedia
 from datasets import load_dataset
 
 from src.llm import embed_texts
+from src.logging_utils import get_logger
 from src.neo4j_client import neo4j_client
 
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @dataclass
 class IngestResult:
+    """Summary result of a single ingested page/document."""
+
     topic: str
     page_id: str
     title: str
@@ -33,6 +37,7 @@ def _upsert_page_from_text(
     text: str,
     summary: str,
 ) -> IngestResult:
+    """Upsert one page, chunks, entities, and mention edges into Neo4j."""
     chunks = _chunk_text(text)
     entities = _extract_entities_simple(text)
     embeddings = embed_texts(chunks) if chunks else []
@@ -94,6 +99,11 @@ def _upsert_page_from_text(
                 name=name,
             )
 
+    logger.info(
+        "Page upserted",
+        extra={"page_id": page_id, "title": title, "chunks": len(chunks), "entities": len(entities)},
+    )
+
     return IngestResult(
         topic=title,
         page_id=page_id,
@@ -105,6 +115,7 @@ def _upsert_page_from_text(
 
 
 def _chunk_text(text: str, chunk_size: int = 900, overlap: int = 120) -> list[str]:
+    """Split text into overlapping chunks for retrieval and embedding."""
     cleaned = re.sub(r"\s+", " ", text).strip()
     if not cleaned:
         return []
@@ -122,6 +133,7 @@ def _chunk_text(text: str, chunk_size: int = 900, overlap: int = 120) -> list[st
 
 
 def _extract_entities_simple(text: str, max_entities: int = 25) -> list[str]:
+    """Extract simple title-cased entities using regex heuristic."""
     candidates = re.findall(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\b", text)
     deduped: list[str] = []
     seen = set()
@@ -137,6 +149,7 @@ def _extract_entities_simple(text: str, max_entities: int = 25) -> list[str]:
 
 
 def ingest_topic(topic: str) -> IngestResult:
+    """Ingest one topic from Wikipedia API into graph."""
     page = wikipedia.page(topic, auto_suggest=False)
     page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, page.url))
     summary = wikipedia.summary(topic, auto_suggest=False, sentences=3)
@@ -203,7 +216,6 @@ def ingest_topic(topic: str) -> IngestResult:
                 name=name,
             )
 
-        # Add direct wiki page graph links (inspired by category/page enrichment approaches).
         for linked_title in linked_titles:
             linked_url = f"https://en.wikipedia.org/wiki/{linked_title.replace(' ', '_')}"
             linked_page_id = str(uuid.uuid5(uuid.NAMESPACE_URL, linked_url))
@@ -221,6 +233,8 @@ def ingest_topic(topic: str) -> IngestResult:
                 target_title=linked_title,
                 target_url=linked_url,
             )
+
+    logger.info("Wikipedia topic ingested", extra={"topic": topic, "page_id": page_id})
 
     return IngestResult(
         topic=topic,
@@ -240,6 +254,7 @@ def ingest_from_hf(
     on_progress: Callable[[int, int | None, str], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> list[IngestResult]:
+    """Ingest sample records from `wikimedia/wikipedia` Hugging Face dataset."""
     results: list[IngestResult] = []
     total: int | None = sample_size if streaming else None
 
@@ -254,6 +269,7 @@ def ingest_from_hf(
 
     for idx, raw_row in enumerate(iterable):
         if should_stop and should_stop():
+            logger.info("HF ingestion stop requested", extra={"processed": processed})
             break
         if streaming and idx >= sample_size:
             break
@@ -277,7 +293,7 @@ def ingest_from_hf(
                 summary=summary,
             )
         except Exception as exc:
-            logger.warning("Skipping malformed HF row at index %s: %s", idx, exc)
+            logger.warning("Skipping malformed HF row", extra={"index": idx, "error": str(exc)})
             continue
 
         results.append(result)
@@ -285,4 +301,5 @@ def ingest_from_hf(
         if on_progress:
             on_progress(processed, total, result.title)
 
+    logger.info("HF ingestion completed", extra={"processed": processed, "requested": sample_size})
     return results

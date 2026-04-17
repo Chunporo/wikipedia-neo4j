@@ -1,3 +1,5 @@
+"""Configuration and runtime validation helpers."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -7,6 +9,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
+    """Application settings loaded from environment variables."""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     neo4j_uri: str = "bolt://localhost:7687"
@@ -26,6 +30,7 @@ class Settings(BaseSettings):
     @field_validator("rate_limit_per_minute")
     @classmethod
     def validate_rate_limit_per_minute(cls, value: int) -> int:
+        """Ensure configured rate limit is positive."""
         if value < 1:
             raise ValueError("rate_limit_per_minute must be >= 1")
         return value
@@ -35,6 +40,7 @@ settings = Settings()
 
 
 def validate_runtime_settings() -> None:
+    """Validate critical settings that should fail fast on startup."""
     if not settings.neo4j_uri.strip():
         raise RuntimeError("NEO4J_URI cannot be empty")
     if not settings.neo4j_username.strip():
@@ -51,10 +57,10 @@ def validate_runtime_settings() -> None:
 
 
 def load_gemini_api_keys() -> list[str]:
+    """Load one or more Gemini API keys from configured key file."""
     try:
         with open(settings.gemini_key_file, "r", encoding="utf-8") as f:
             raw = f.read()
-            # Support files containing multiple candidate keys (one per line).
             lines = [
                 ln.strip()
                 for ln in raw.splitlines()
@@ -73,4 +79,5 @@ def load_gemini_api_keys() -> list[str]:
 
 
 def load_gemini_api_key() -> str:
+    """Load the first configured Gemini API key."""
     return load_gemini_api_keys()[0]

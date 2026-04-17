@@ -1,13 +1,21 @@
+"""Graph retrieval and deterministic answer assembly."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from src.llm import assert_readonly_cypher, generate_readonly_cypher
+from src.logging_utils import get_logger
 from src.neo4j_client import neo4j_client
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
 class QueryResult:
+    """Query response model used by API layer."""
+
     answer: str
     citations: list[dict]
 
@@ -42,16 +50,20 @@ LIMIT $top_k
 
 
 def _run_fallback_query(question: str, top_k: int) -> list[dict]:
+    """Execute safe fallback query when LLM-generated Cypher fails."""
     with neo4j_client.session() as session:
         records = session.run(
             _HYBRID_FALLBACK_CYPHER,
             q=question,
             top_k=top_k,
         )
-        return [dict(r) for r in records]
+        rows = [dict(r) for r in records]
+    logger.info("Fallback retrieval executed", extra={"rows": len(rows)})
+    return rows
 
 
 def _run_generated_query(question: str, top_k: int) -> list[dict]:
+    """Generate, validate, and execute LLM-produced read-only Cypher."""
     cypher = generate_readonly_cypher(question)
     assert_readonly_cypher(cypher)
 
@@ -64,14 +76,15 @@ def _run_generated_query(question: str, top_k: int) -> list[dict]:
         if not required_keys.issubset(row):
             raise RuntimeError("Generated query returned unexpected shape")
 
+    logger.info("Generated retrieval executed", extra={"rows": len(rows)})
     return rows
 
 
 def query_graph(question: str, top_k: int = 4) -> QueryResult:
+    """Query graph and synthesize a deterministic answer with citations."""
     try:
         rows = _run_generated_query(question, top_k)
     except (RuntimeError, ValueError, KeyError, TypeError):
-        # Safe fallback keeps demo available even if LLM output is malformed.
         rows = _run_fallback_query(question, top_k)
 
     if not rows:
