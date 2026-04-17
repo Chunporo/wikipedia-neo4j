@@ -1,0 +1,99 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from src.llm import assert_readonly_cypher, generate_readonly_cypher
+from src.neo4j_client import neo4j_client
+
+
+@dataclass
+class QueryResult:
+    answer: str
+    citations: list[dict]
+
+
+_HYBRID_FALLBACK_CYPHER = """
+CALL {
+  CALL db.index.fulltext.queryNodes('chunk_text_ft', $q) YIELD node, score
+  MATCH (p:Page)-[:HAS_CHUNK]->(node)
+  RETURN p.title AS page_title,
+         p.url AS page_url,
+         node.id AS chunk_id,
+         node.text AS chunk_text,
+         score * 1.0 AS score
+  LIMIT $top_k
+
+  UNION
+
+  CALL db.index.fulltext.queryNodes('page_title_ft', $q) YIELD node, score
+  MATCH (node:Page)-[:HAS_CHUNK]->(c:Chunk)
+  RETURN node.title AS page_title,
+         node.url AS page_url,
+         c.id AS chunk_id,
+         c.text AS chunk_text,
+         score * 0.8 AS score
+  LIMIT $top_k
+}
+WITH page_title, page_url, chunk_id, chunk_text, max(score) AS score
+RETURN page_title, page_url, chunk_id, chunk_text, score
+ORDER BY score DESC
+LIMIT $top_k
+"""
+
+
+def _run_fallback_query(question: str, top_k: int) -> list[dict]:
+    with neo4j_client.session() as session:
+        records = session.run(
+            _HYBRID_FALLBACK_CYPHER,
+            q=question,
+            top_k=top_k,
+        )
+        return [dict(r) for r in records]
+
+
+def _run_generated_query(question: str, top_k: int) -> list[dict]:
+    cypher = generate_readonly_cypher(question)
+    assert_readonly_cypher(cypher)
+
+    with neo4j_client.session() as session:
+        records = session.run(cypher, q=question, top_k=top_k)
+        rows = [dict(r) for r in records]
+
+    required_keys = {"page_title", "page_url", "chunk_id", "chunk_text", "score"}
+    for row in rows:
+        if not required_keys.issubset(row):
+            raise RuntimeError("Generated query returned unexpected shape")
+
+    return rows
+
+
+def query_graph(question: str, top_k: int = 4) -> QueryResult:
+    try:
+        rows = _run_generated_query(question, top_k)
+    except (RuntimeError, ValueError, KeyError, TypeError):
+        # Safe fallback keeps demo available even if LLM output is malformed.
+        rows = _run_fallback_query(question, top_k)
+
+    if not rows:
+        return QueryResult(
+            answer="I could not find relevant context in the graph yet. Try ingesting more topics.",
+            citations=[],
+        )
+
+    citations = [
+        {
+            "page_title": r["page_title"],
+            "page_url": r["page_url"],
+            "chunk_id": r["chunk_id"],
+        }
+        for r in rows
+    ]
+
+    snippets = []
+    for r in rows:
+        txt = (r["chunk_text"] or "").strip().replace("\n", " ")
+        snippets.append(txt[:220])
+
+    answer = "Deterministic demo answer from retrieved graph context: " + " | ".join(snippets[:2])
+
+    return QueryResult(answer=answer, citations=citations)

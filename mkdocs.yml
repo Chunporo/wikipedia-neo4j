@@ -1,0 +1,31 @@
+site_name: Wikipedia Neo4j GraphRAG Demo
+site_description: Documentation for the Wikipedia → Neo4j GraphRAG backend demo
+site_url: http://localhost:8001
+repo_name: wikipedia-neo4j
+
+theme:
+  name: material
+  features:
+    - navigation.instant
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.highlight
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Setup & Run: setup.md
+  - API:
+      - Endpoints: api/endpoints.md
+      - Background Jobs: api/background-jobs.md
+  - Ingestion Modes:
+      - Wikipedia API: ingestion-wikipedia.md
+      - Hugging Face Dataset: ingestion-hf.md
+  - Operations & Troubleshooting: operations.md
+  - Changelog: changelog.md

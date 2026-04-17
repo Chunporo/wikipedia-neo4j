@@ -1,0 +1,12 @@
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+.env
+.gemini_key.txt
+.codex
+.claude/
+.coverage
+site/
+.hf_ingest_jobs.json
