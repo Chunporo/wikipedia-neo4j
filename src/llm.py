@@ -8,7 +8,11 @@ import re
 from google import genai
 from google.genai import types
 
-from src.config import load_gemini_api_keys, settings
+from src.config import (
+    load_gemini_api_keys,
+    resolve_cypher_model,
+    settings,
+)
 from src.logging_utils import get_logger
 
 
@@ -102,7 +106,7 @@ Strict rules:
     for i, client in enumerate(clients, start=1):
         try:
             resp = client.models.generate_content(
-                model=settings.gemini_model_text,
+                model=resolve_cypher_model(),
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     temperature=0.0,

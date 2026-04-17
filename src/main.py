@@ -13,7 +13,12 @@ from contextvars import Token
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from src.config import settings, validate_runtime_settings
+from src.config import (
+    resolve_cypher_model,
+    resolve_orchestrator_model,
+    settings,
+    validate_runtime_settings,
+)
 from src.ingest import IngestResult, ingest_from_hf, ingest_topic
 from src.job_store import JobStore
 from src.logging_utils import (
@@ -279,6 +284,29 @@ def query(req: QueryRequest, request: Request) -> dict:
         "answer": result.answer,
         "citations": result.citations,
     }
+
+
+@app.post("/query/explain", dependencies=[Depends(_guard)])
+def query_explain(req: QueryRequest, request: Request) -> dict:
+    """Explain query strategy and model configuration without executing retrieval."""
+    _request_id_value, token = _with_request_context(request)
+    try:
+        return {
+            "question": req.question,
+            "top_k": req.top_k,
+            "strategy": {
+                "primary": "generated_readonly_cypher",
+                "fallback": "hybrid_fulltext",
+            },
+            "providers": {
+                "orchestrator": settings.orchestrator_provider,
+                "orchestrator_model": resolve_orchestrator_model(),
+                "cypher": settings.cypher_provider,
+                "cypher_model": resolve_cypher_model(),
+            },
+        }
+    finally:
+        reset_request_id(token)
 
 
 @app.post("/ingest/hf", dependencies=[Depends(_guard)])
