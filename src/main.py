@@ -8,6 +8,7 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from contextvars import Token
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -15,7 +16,12 @@ from pydantic import BaseModel, Field
 from src.config import settings, validate_runtime_settings
 from src.ingest import IngestResult, ingest_from_hf, ingest_topic
 from src.job_store import JobStore
-from src.logging_utils import configure_logging, get_logger
+from src.logging_utils import (
+    configure_logging,
+    get_logger,
+    reset_request_id,
+    set_request_id,
+)
 from src.neo4j_client import neo4j_client
 from src.retrieve import query_graph
 
@@ -183,6 +189,13 @@ def _guard(request: Request, x_api_key: str | None = Header(default=None)) -> No
     _enforce_rate_limit(request)
 
 
+def _with_request_context(request: Request) -> tuple[str, Token[str]]:
+    """Attach request id into logging context and return id plus token."""
+    request_id = _request_id(request)
+    token = set_request_id(request_id)
+    return request_id, token
+
+
 @app.get("/health")
 def health() -> dict:
     """Return basic liveness status."""
@@ -230,33 +243,37 @@ def metrics() -> str:
 @app.post("/ingest", dependencies=[Depends(_guard)])
 def ingest(req: IngestRequest, request: Request) -> dict:
     """Ingest one or more Wikipedia topics."""
-    request_id = _request_id(request)
-    results = []
-    for topic in req.topics:
-        try:
-            result = ingest_topic(topic)
-        except (ValueError, RuntimeError) as exc:
-            logger.warning("Topic ingest failed", extra={"request_id": request_id, "topic": topic})
-            raise HTTPException(status_code=400, detail=f"Failed ingest for '{topic}': {exc}") from exc
-        results.append(_serialize_ingest_result(result))
+    _request_id_value, token = _with_request_context(request)
+    try:
+        results = []
+        for topic in req.topics:
+            try:
+                result = ingest_topic(topic)
+            except (ValueError, RuntimeError) as exc:
+                logger.warning("Topic ingest failed", extra={"topic": topic})
+                raise HTTPException(status_code=400, detail=f"Failed ingest for '{topic}': {exc}") from exc
+            results.append(_serialize_ingest_result(result))
 
-    logger.info("Topic ingest completed", extra={"request_id": request_id, "count": len(results)})
-    return {"ingested": results}
+        logger.info("Topic ingest completed", extra={"count": len(results)})
+        return {"ingested": results}
+    finally:
+        reset_request_id(token)
 
 
 @app.post("/query", dependencies=[Depends(_guard)])
 def query(req: QueryRequest, request: Request) -> dict:
     """Query graph and return deterministic answer plus citations."""
-    request_id = _request_id(request)
+    _request_id_value, token = _with_request_context(request)
     started = time.perf_counter()
     try:
         result = query_graph(req.question, req.top_k)
     except RuntimeError as exc:
-        logger.exception("Query failed", extra={"request_id": request_id})
+        logger.exception("Query failed")
         raise HTTPException(status_code=500, detail=f"Query failed: {exc}") from exc
-
-    elapsed_ms = int((time.perf_counter() - started) * 1000)
-    logger.info("Query completed", extra={"request_id": request_id, "duration_ms": elapsed_ms})
+    finally:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        logger.info("Query completed", extra={"duration_ms": elapsed_ms})
+        reset_request_id(token)
 
     return {
         "answer": result.answer,
@@ -267,7 +284,7 @@ def query(req: QueryRequest, request: Request) -> dict:
 @app.post("/ingest/hf", dependencies=[Depends(_guard)])
 def ingest_hf(req: HFDatasetIngestRequest, request: Request) -> dict:
     """Ingest a bounded sample directly from HF dataset (synchronous)."""
-    request_id = _request_id(request)
+    _request_id_value, token = _with_request_context(request)
     try:
         results = ingest_from_hf(
             config_name=req.config_name,
@@ -276,10 +293,12 @@ def ingest_hf(req: HFDatasetIngestRequest, request: Request) -> dict:
             streaming=req.streaming,
         )
     except RuntimeError as exc:
-        logger.warning("HF ingest failed", extra={"request_id": request_id})
+        logger.warning("HF ingest failed")
         raise HTTPException(status_code=400, detail=f"Failed HF ingestion: {exc}") from exc
+    finally:
+        reset_request_id(token)
 
-    logger.info("HF ingest completed", extra={"request_id": request_id, "count": len(results)})
+    logger.info("HF ingest completed", extra={"count": len(results)})
     return {"ingested": [_serialize_ingest_result(r) for r in results]}
 
 
