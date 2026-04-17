@@ -80,3 +80,30 @@ def test_rate_limit_rejects_excess(monkeypatch) -> None:
         resp = client.post("/query", json={"question": "hello world", "top_k": 1})
 
     assert resp.status_code == 429
+
+
+def test_with_request_context_sets_and_resets_request_id(monkeypatch) -> None:
+    captured = {"value": None}
+
+    def _fake_set_request_id(value: str):
+        captured["value"] = value
+        return "token"
+
+    def _fake_reset_request_id(token):
+        captured["reset"] = token
+
+    monkeypatch.setattr(main, "set_request_id", _fake_set_request_id)
+    monkeypatch.setattr(main, "reset_request_id", _fake_reset_request_id)
+
+    class _Client:
+        host = "127.0.0.1"
+
+    class _Req:
+        headers = {"X-Request-ID": "rid-001"}
+        client = _Client()
+
+    rid, token = main._with_request_context(_Req())
+
+    assert rid == "rid-001"
+    assert token == "token"
+    assert captured["value"] == "rid-001"
