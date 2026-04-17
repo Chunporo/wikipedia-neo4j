@@ -76,3 +76,25 @@ If `APP_API_KEY` is set, protected endpoints require:
 - `X-API-Key: <APP_API_KEY>`
 
 Rate limiting is per client IP, configurable by `RATE_LIMIT_PER_MINUTE`.
+
+
+## Query explain
+
+### `POST /query/explain`
+
+Returns query strategy and active provider/model settings without executing retrieval.
+
+Request:
+
+```json
+{
+  "question": "What is Neo4j used for?",
+  "top_k": 5
+}
+```
+
+Response includes:
+- `strategy.primary`
+- `strategy.fallback`
+- `providers.orchestrator` / `providers.orchestrator_model`
+- `providers.cypher` / `providers.cypher_model`

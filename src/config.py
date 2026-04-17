@@ -16,11 +16,23 @@ class Settings(BaseSettings):
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_username: str = "neo4j"
     neo4j_password: str = "please-change-me"
-    openai_api_key: str | None = None
 
+    # Legacy compatibility fields (still supported)
+    openai_api_key: str | None = None
     gemini_key_file: str = ".gemini_key.txt"
     gemini_model_text: str = "gemini-2.0-flash"
     gemini_model_embedding: str = "gemini-embedding-001"
+
+    # Provider-explicit model configuration (preferred)
+    orchestrator_provider: str = "google"
+    orchestrator_model: str = "gemini-2.0-flash"
+    orchestrator_api_key: str | None = None
+    orchestrator_endpoint: str | None = None
+
+    cypher_provider: str = "google"
+    cypher_model: str = "gemini-2.0-flash"
+    cypher_api_key: str | None = None
+    cypher_endpoint: str | None = None
 
     app_api_key: str | None = None
     rate_limit_per_minute: int = 120
@@ -55,6 +67,20 @@ def validate_runtime_settings() -> None:
                 f"Gemini key file not found: {settings.gemini_key_file}. "
                 "Create it with your API key or disable REQUIRE_GEMINI_KEY_ON_STARTUP."
             )
+
+
+def resolve_orchestrator_model() -> str:
+    """Resolve orchestrator model with backward-compatible fallback."""
+    if settings.orchestrator_model.strip():
+        return settings.orchestrator_model
+    return settings.gemini_model_text
+
+
+def resolve_cypher_model() -> str:
+    """Resolve Cypher model with backward-compatible fallback."""
+    if settings.cypher_model.strip():
+        return settings.cypher_model
+    return settings.gemini_model_text
 
 
 def load_gemini_api_keys() -> list[str]:

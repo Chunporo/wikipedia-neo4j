@@ -43,3 +43,15 @@ def test_load_gemini_api_keys_empty_file(tmp_path: Path, monkeypatch) -> None:
 
     with pytest.raises(RuntimeError, match="empty"):
         config.load_gemini_api_keys()
+
+
+def test_resolve_orchestrator_model_prefers_new_field(monkeypatch) -> None:
+    monkeypatch.setattr(config.settings, "orchestrator_model", "model-new")
+    monkeypatch.setattr(config.settings, "gemini_model_text", "model-legacy")
+    assert config.resolve_orchestrator_model() == "model-new"
+
+
+def test_resolve_cypher_model_prefers_new_field(monkeypatch) -> None:
+    monkeypatch.setattr(config.settings, "cypher_model", "model-cypher")
+    monkeypatch.setattr(config.settings, "gemini_model_text", "model-legacy")
+    assert config.resolve_cypher_model() == "model-cypher"

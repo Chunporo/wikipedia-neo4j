@@ -92,6 +92,14 @@ curl -X POST "http://localhost:8000/query" \
   -d '{"question":"How are graph databases used?","top_k":4}'
 ```
 
+### Query explain
+
+```bash
+curl -X POST "http://localhost:8000/query/explain" \
+  -H "Content-Type: application/json" \
+  -d '{"question":"How are graph databases used?","top_k":4}'
+```
+
 ### Health/Readiness/Metrics
 
 ```bash
@@ -118,3 +126,13 @@ python -m compileall -q src tests
 ```
 
 CI workflow is under `.github/workflows/ci.yml`.
+
+
+## Provider-explicit model config
+
+This project supports provider-explicit model settings (with backward-compatible defaults):
+
+- `ORCHESTRATOR_PROVIDER`, `ORCHESTRATOR_MODEL`
+- `CYPHER_PROVIDER`, `CYPHER_MODEL`
+
+Legacy Gemini settings are still supported for compatibility.
