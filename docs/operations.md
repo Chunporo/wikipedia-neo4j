@@ -29,6 +29,12 @@ Optional:
 - `APP_API_KEY` to require `X-API-Key` on protected endpoints.
 - `RATE_LIMIT_PER_MINUTE` for per-client request throttling.
 
+## Logging
+
+- `LOG_LEVEL` controls verbosity (`DEBUG`, `INFO`, `WARNING`, ...).
+- `JSON_LOGS=true` enables structured one-line JSON logs.
+- Log records include `request_id` and relevant operational fields when available (e.g. `duration_ms`, `job_id`, `status`).
+
 ## Readiness and metrics
 
 - `GET /ready` verifies Neo4j connectivity and reports dependency status.

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     app_api_key: str | None = None
     rate_limit_per_minute: int = 120
     log_level: str = "INFO"
+    json_logs: bool = False
     require_gemini_key_on_startup: bool = False
 
     @field_validator("rate_limit_per_minute")
