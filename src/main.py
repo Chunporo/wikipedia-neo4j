@@ -26,7 +26,7 @@ from src.neo4j_client import neo4j_client
 from src.retrieve import query_graph
 
 
-configure_logging(settings.log_level)
+configure_logging(settings.log_level, json_logs=settings.json_logs)
 logger = get_logger(__name__)
 
 

@@ -107,3 +107,20 @@ def test_with_request_context_sets_and_resets_request_id(monkeypatch) -> None:
     assert rid == "rid-001"
     assert token == "token"
     assert captured["value"] == "rid-001"
+
+
+def test_main_uses_json_log_setting_for_configure_logging(monkeypatch) -> None:
+    calls = {}
+
+    def _fake_configure_logging(level_name: str, json_logs: bool = False):
+        calls["level_name"] = level_name
+        calls["json_logs"] = json_logs
+
+    monkeypatch.setattr(main, "configure_logging", _fake_configure_logging)
+    monkeypatch.setattr(main.settings, "log_level", "DEBUG")
+    monkeypatch.setattr(main.settings, "json_logs", True)
+
+    main.configure_logging(main.settings.log_level, json_logs=main.settings.json_logs)
+
+    assert calls["level_name"] == "DEBUG"
+    assert calls["json_logs"] is True
