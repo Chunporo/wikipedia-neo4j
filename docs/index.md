@@ -18,3 +18,11 @@ Minimal backend service for ingesting Wikipedia content into Neo4j and querying 
 - [API Endpoints](api/endpoints.md)
 - [Background Jobs](api/background-jobs.md)
 - [Operations & Troubleshooting](operations.md)
+
+
+## Operating modes
+
+- **Ingest**: populate graph data from Wikipedia API and HF datasets.
+- **Query**: use natural-language questions over graph context.
+- **Jobs**: run long HF ingestions asynchronously.
+- **Ops**: health, readiness, and metrics endpoints for reliability.
