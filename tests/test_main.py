@@ -124,3 +124,21 @@ def test_main_uses_json_log_setting_for_configure_logging(monkeypatch) -> None:
 
     assert calls["level_name"] == "DEBUG"
     assert calls["json_logs"] is True
+
+
+def test_query_explain_returns_strategy_and_provider_info(monkeypatch) -> None:
+    monkeypatch.setattr(main.settings, "app_api_key", None)
+    monkeypatch.setattr(main.settings, "orchestrator_provider", "google")
+    monkeypatch.setattr(main.settings, "orchestrator_model", "gemini-2.0-flash")
+    monkeypatch.setattr(main.settings, "cypher_provider", "google")
+    monkeypatch.setattr(main.settings, "cypher_model", "gemini-2.0-flash")
+
+    with TestClient(main.app) as client:
+        resp = client.post("/query/explain", json={"question": "hello world", "top_k": 2})
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["strategy"]["primary"] == "generated_readonly_cypher"
+    assert body["strategy"]["fallback"] == "hybrid_fulltext"
+    assert body["providers"]["orchestrator"] == "google"
+    assert body["providers"]["cypher"] == "google"

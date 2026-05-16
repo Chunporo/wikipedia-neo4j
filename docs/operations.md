@@ -35,6 +35,28 @@ Optional:
 - `JSON_LOGS=true` enables structured one-line JSON logs.
 - Log records include `request_id` and relevant operational fields when available (e.g. `duration_ms`, `job_id`, `status`).
 
+## Error payloads
+
+All API errors return a consistent schema:
+
+```json
+{
+  "error_code": "invalid_request",
+  "message": "Unauthorized",
+  "request_id": "c2c57f7b-1b2b-4a7c-8b4f-9ae6e1f1f5c2",
+  "hint": "Provide a valid X-API-Key header"
+}
+```
+
+Stable error codes:
+
+- `cypher_generation_failed`
+- `ingest_failed`
+- `invalid_request`
+- `key_config_invalid`
+
+Use `request_id` to correlate error responses with logs.
+
 ## Readiness and metrics
 
 - `GET /ready` verifies Neo4j connectivity and reports dependency status.

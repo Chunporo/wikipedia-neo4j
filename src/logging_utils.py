@@ -54,6 +54,11 @@ def reset_request_id(token: Token[str]) -> None:
     _REQUEST_ID.reset(token)
 
 
+def get_request_id() -> str:
+    """Return current request id from context."""
+    return _REQUEST_ID.get()
+
+
 def configure_logging(level_name: str = "INFO", json_logs: bool = False) -> None:
     """Configure process-wide logging once.
 
