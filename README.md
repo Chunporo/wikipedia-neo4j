@@ -10,7 +10,7 @@ Backend demo that ingests Wikipedia content into Neo4j and answers questions wit
 
 - **Ingest mode**: build graph context from Wikipedia topics or HF dataset (`/ingest`, `/ingest/hf`, async jobs).
 - **Query mode**: answer user questions with validated Cypher and hybrid fallback retrieval (`/query`).
-- **Export mode**: planned endpoint for graph snapshot export.
+- **Export mode**: graph snapshot export via `GET /export?format=jsonl|csv`.
 - **Ops mode**: health/readiness/metrics/logging for deployment safety.
 
 - Ingestion sources:

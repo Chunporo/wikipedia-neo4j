@@ -95,13 +95,14 @@ def load_gemini_api_keys() -> list[str]:
             ]
             if not lines:
                 raise RuntimeError(
-                    f"Gemini key file is empty: {settings.gemini_key_file}. "
+                    f"key_config_invalid: Gemini key file is empty: {settings.gemini_key_file}. "
                     "Put only the API key content inside it."
                 )
             return lines
     except FileNotFoundError as exc:
         raise RuntimeError(
-            f"Gemini key file not found: {settings.gemini_key_file}. Create it with your API key."
+            f"key_config_invalid: Gemini key file not found: {settings.gemini_key_file}. "
+            "Create it with your API key."
         ) from exc
 
 
